@@ -250,6 +250,7 @@ const defaultPlan = [
 
 let state = load() || { plan: defaultPlan, history: [] };
 if(!state.history) state.history=[];
+if(!state.drafts) state.drafts={};
 let uidN = 1000;
 const uid = ()=> 'x'+(uidN++)+Date.now().toString(36).slice(-4);
 
@@ -432,6 +433,7 @@ document.getElementById('add-day-btn').addEventListener('click',()=>{
 document.getElementById('reset-logs-btn').addEventListener('click',()=>{
   if(!confirm('This permanently deletes all logged workout history. Your training plan stays as-is. Continue?')) return;
   state.history = [];
+  state.drafts = {};
   currentSessionId = null;
   confirmationData = null;
   save();
@@ -470,7 +472,13 @@ function renderLogPicker(){
   else renderLogBody();
 }
 
-let draftSets = {}; // exId -> [{weight,reps}]
+let draftSets = {}; // exId -> [{weight,reps,done}]
+
+function persistDraft(){
+  if(!state.drafts) state.drafts = {};
+  state.drafts[activeLogDay] = JSON.parse(JSON.stringify(draftSets));
+  save();
+}
 
 function renderLogBody(){
   const day = state.plan.find(d=>d.id===activeLogDay);
@@ -484,25 +492,33 @@ function renderLogBody(){
 
   body.innerHTML='';
   draftSets = {};
+  const savedDraft = (state.drafts && state.drafts[day.id]) || null;
 
   day.exercises.forEach(ex=>{
     const last = lastLogFor(ex.name);
+    const draftForEx = savedDraft && savedDraft[ex.id];
     draftSets[ex.id] = [];
     const box=document.createElement('div');
     box.className='log-ex';
     let podsHtml='';
     for(let i=0;i<ex.sets;i++){
-      const prev = last && last.sets[i] ? last.sets[i] : (last && last.sets.length ? last.sets[last.sets.length-1] : null);
-      const w = prev ? prev.weight : '';
-      const r = prev ? prev.reps : '';
-      draftSets[ex.id].push({weight:w, reps:r, done:false});
-      const lastLabel = prev ? `${prev.weight}×${prev.reps}` : '—';
+      let w, r, doneFlag=false;
+      if(draftForEx && draftForEx[i]){
+        w = draftForEx[i].weight; r = draftForEx[i].reps; doneFlag = !!draftForEx[i].done;
+      } else {
+        const prev = last && last.sets[i] ? last.sets[i] : (last && last.sets.length ? last.sets[last.sets.length-1] : null);
+        w = prev ? prev.weight : '';
+        r = prev ? prev.reps : '';
+      }
+      draftSets[ex.id].push({weight:w, reps:r, done:doneFlag});
+      const prevForLabel = last && last.sets[i] ? last.sets[i] : (last && last.sets.length ? last.sets[last.sets.length-1] : null);
+      const lastLabel = prevForLabel ? `${prevForLabel.weight}×${prevForLabel.reps}` : '—';
       podsHtml += `<div class="set-pod">
         <div class="pod-setnum">Set ${i+1}</div>
         <div class="pod-weight"><input type="number" inputmode="decimal" placeholder="0" value="${w}" data-w="${ex.id}|${i}"><span class="unit">lb</span></div>
         <div class="pod-reps"><input type="number" inputmode="numeric" placeholder="0" value="${r}" data-r="${ex.id}|${i}"><span class="unit">rep</span></div>
         <div class="pod-last">last ${lastLabel}</div>
-        <button class="pod-check" data-check="${ex.id}|${i}">✓</button>
+        <button class="pod-check${doneFlag?' done':''}" data-check="${ex.id}|${i}">✓</button>
       </div>`;
     }
     box.innerHTML = `<h3>${ex.name}</h3>
@@ -518,14 +534,17 @@ function renderLogBody(){
 
   body.querySelectorAll('[data-w]').forEach(inp=>inp.addEventListener('input',()=>{
     const [exId,idx]=inp.dataset.w.split('|'); draftSets[exId][idx].weight = parseFloat(inp.value)||0;
+    persistDraft();
   }));
   body.querySelectorAll('[data-r]').forEach(inp=>inp.addEventListener('input',()=>{
     const [exId,idx]=inp.dataset.r.split('|'); draftSets[exId][idx].reps = parseInt(inp.value)||0;
+    persistDraft();
   }));
   body.querySelectorAll('[data-check]').forEach(btn=>btn.addEventListener('click',()=>{
     const [exId,idx]=btn.dataset.check.split('|');
     draftSets[exId][idx].done = !draftSets[exId][idx].done;
     btn.classList.toggle('done');
+    persistDraft();
   }));
 }
 
@@ -577,6 +596,7 @@ function finishWorkout(day){
     state.history.push(entry);
     currentSessionId = entry.id;
   }
+  if(state.drafts) delete state.drafts[day.id];
   save();
   confirmationData = {
     dayId: day.id,
@@ -678,6 +698,13 @@ function renderProgressBody(){
     });
   }
 }
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='hidden' && draftSets && Object.keys(draftSets).length) persistDraft();
+});
+window.addEventListener('pagehide', ()=>{
+  if(draftSets && Object.keys(draftSets).length) persistDraft();
+});
 
 renderPlan();
 renderLogPicker();
