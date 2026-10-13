@@ -71,6 +71,15 @@ nav.tabs{display:flex; gap:6px; margin-bottom:18px; border-bottom:2px solid var(
 .ex-actions button:disabled{opacity:.25;}
 .drag-handle{cursor:grab; padding:2px 8px; color:var(--ink-dim); font-size:1.1rem; touch-action:none; user-select:none; -webkit-user-select:none;}
 .drag-handle:active{cursor:grabbing; color:var(--accent);}
+.day-card.dragging{opacity:.5;}
+.day-title{cursor:pointer;}
+.day-title:hover{color:var(--accent);}
+.day-title .rename-hint{font-size:.8rem; color:var(--ink-dim); margin-left:4px;}
+.suggest-list{display:none; background:var(--surface); border:1px solid var(--border); border-radius:3px; margin-top:3px; max-height:170px; overflow-y:auto;}
+.suggest-list.show{display:block;}
+.suggest-item{padding:9px 10px; font-size:.9rem; cursor:pointer; border-top:1px solid var(--border);}
+.suggest-item:first-child{border-top:none;}
+.suggest-item:hover{background:var(--surface-2);}
 .ex-row.dragging{opacity:.4; background:var(--surface-2);}
 .ex-edit-row{flex-direction:column; align-items:stretch; padding:10px 0;}
 .btn{
@@ -290,6 +299,59 @@ document.querySelectorAll('.tab').forEach(t=>{
 // ---------- PLAN VIEW ----------
 let editingEx = null; // {dayId, exId}
 
+function canonicalName(name){
+  const m = allLoggedExerciseNames().find(n=>n.toLowerCase()===name.toLowerCase());
+  return m || name;
+}
+function attachSuggest(input){
+  const list=document.createElement('div'); list.className='suggest-list';
+  input.parentNode.appendChild(list);
+  input.setAttribute('autocomplete','off');
+  input.addEventListener('input',()=>{
+    const q=input.value.trim().toLowerCase();
+    list.innerHTML='';
+    const matches = q ? allLoggedExerciseNames().filter(n=>n.toLowerCase().includes(q) && n.toLowerCase()!==q).slice(0,6) : [];
+    matches.forEach(n=>{
+      const item=document.createElement('div');
+      item.className='suggest-item'; item.textContent=n;
+      item.addEventListener('pointerdown',ev=>{ ev.preventDefault(); input.value=n; list.classList.remove('show'); list.innerHTML=''; });
+      list.appendChild(item);
+    });
+    list.classList.toggle('show', matches.length>0);
+  });
+  input.addEventListener('blur',()=>setTimeout(()=>list.classList.remove('show'),150));
+}
+
+function makeDaysDraggable(wrap){
+  wrap.querySelectorAll('.day-handle').forEach(handle=>{
+    handle.addEventListener('pointerdown',(e)=>{
+      e.preventDefault();
+      const dragEl=handle.closest('.day-card');
+      dragEl.classList.add('dragging');
+      handle.setPointerCapture(e.pointerId);
+      const onMove=(ev)=>{
+        const siblings=Array.from(wrap.children).filter(r=>r!==dragEl);
+        let target=null;
+        for(const r of siblings){
+          const rect=r.getBoundingClientRect();
+          if(ev.clientY < rect.top+rect.height/2){ target=r; break; }
+        }
+        if(target) wrap.insertBefore(dragEl,target); else wrap.appendChild(dragEl);
+      };
+      const onUp=()=>{
+        document.removeEventListener('pointermove',onMove);
+        document.removeEventListener('pointerup',onUp);
+        dragEl.classList.remove('dragging');
+        const order=Array.from(wrap.children).map(r=>r.dataset.dayRow);
+        state.plan.sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id));
+        save(); renderPlan();
+      };
+      document.addEventListener('pointermove',onMove);
+      document.addEventListener('pointerup',onUp);
+    });
+  });
+}
+
 function makeDraggable(list, day){
   list.querySelectorAll('.drag-handle').forEach(handle=>{
     handle.addEventListener('pointerdown', (e)=>{
@@ -330,9 +392,13 @@ function renderPlan(){
   state.plan.forEach(day=>{
     const card=document.createElement('div');
     card.className='card day-card';
+    card.dataset.dayRow = day.id;
     card.innerHTML = `
-      <div class="row" style="justify-content:space-between;align-items:flex-start;">
-        <div><h3>${day.name}</h3><div class="meta">${day.exercises.length} exercise${day.exercises.length===1?'':'s'}</div></div>
+      <div class="row" style="justify-content:space-between;align-items:flex-start;flex-wrap:nowrap;">
+        <div style="display:flex;gap:4px;align-items:flex-start;">
+          <span class="drag-handle day-handle" title="Drag to reorder day">⠿</span>
+          <div><h3 class="day-title" data-rename-day="${day.id}">${day.name}<span class="rename-hint">✎</span></h3><div class="meta">${day.exercises.length} exercise${day.exercises.length===1?'':'s'}</div></div>
+        </div>
         <button class="btn ghost small" data-del-day="${day.id}">Delete day</button>
       </div>
       <div class="ex-list"></div>
@@ -376,9 +442,20 @@ function renderPlan(){
       list.appendChild(row);
     });
     makeDraggable(list, day);
+    const addInput = card.querySelector('#name-'+day.id); if(addInput) attachSuggest(addInput);
+    card.querySelectorAll('input[id^="edit-name-"]').forEach(attachSuggest);
     wrap.appendChild(card);
   });
 
+  makeDaysDraggable(wrap);
+  wrap.querySelectorAll('[data-rename-day]').forEach(el=>el.addEventListener('click',()=>{
+    const day=state.plan.find(d=>d.id===el.dataset.renameDay);
+    const name=prompt('Rename this training day:', day.name);
+    if(!name || !name.trim()) return;
+    const newName=name.trim();
+    state.history.forEach(h=>{ if(h.dayName===day.name) h.dayName=newName; });
+    day.name=newName; save(); renderPlan();
+  }));
   wrap.querySelectorAll('[data-del-day]').forEach(b=>b.addEventListener('click',()=>{
     state.plan = state.plan.filter(d=>d.id!==b.dataset.delDay); save(); renderPlan();
   }));
@@ -402,7 +479,7 @@ function renderPlan(){
     const ex=day.exercises.find(e=>e.id===exId);
     const name=document.getElementById('edit-name-'+exId).value.trim();
     if(!name) return;
-    ex.name = name;
+    ex.name = name.toLowerCase()===ex.name.toLowerCase() ? name : canonicalName(name);
     ex.sets = parseInt(document.getElementById('edit-sets-'+exId).value)||ex.sets;
     ex.repMin = parseInt(document.getElementById('edit-rmin-'+exId).value)||ex.repMin;
     ex.repMax = parseInt(document.getElementById('edit-rmax-'+exId).value)||ex.repMax;
@@ -420,7 +497,7 @@ function renderPlan(){
     const rmin=parseInt(document.getElementById('rmin-'+dayId).value)||8;
     const rmax=parseInt(document.getElementById('rmax-'+dayId).value)||12;
     const day=state.plan.find(d=>d.id===dayId);
-    day.exercises.push({id:uid(),name,sets,repMin:rmin,repMax:rmax});
+    day.exercises.push({id:uid(),name:canonicalName(name),sets,repMin:rmin,repMax:rmax});
     save(); renderPlan();
   }));
 }
