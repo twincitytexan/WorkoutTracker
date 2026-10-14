@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Iron Log">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#c1440e">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -171,6 +172,9 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
 .stat .lbl{font-size:.7rem; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.03em;}
 .danger-zone{margin-top:22px; padding-top:14px; border-top:1px dashed var(--border); text-align:center;}
 .danger-zone button{color:var(--warn); border-color:var(--warn);}
+.danger-zone button.neutral{color:var(--ink); border-color:var(--border);}
+.danger-zone button.btn:not(.ghost){color:var(--accent-ink); border-color:var(--accent);}
+textarea{background:var(--surface-2); border:1px solid var(--border); border-radius:3px; color:var(--ink); padding:8px 9px; font-size:.8rem; font-family:var(--font-body); width:100%;}
 .chart-wrap{background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px; margin-bottom:14px;}
 .hist-item{display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--border); font-size:.88rem;}
 .hist-item:first-of-type{border-top:none;}
@@ -194,6 +198,15 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent); o
     <div id="plan-days"></div>
     <button class="btn ghost" id="add-day-btn" style="width:100%">+ Add training day</button>
     <div class="danger-zone">
+      <div class="row" style="justify-content:center;margin-bottom:10px;">
+        <button class="btn ghost small neutral" id="backup-btn">Copy backup</button>
+        <button class="btn ghost small neutral" id="restore-btn">Restore from backup</button>
+      </div>
+      <div id="backup-area" style="display:none;margin-bottom:12px;text-align:left;">
+        <p id="backup-msg" style="font-size:.82rem;color:var(--ink-dim);margin:0 0 6px;"></p>
+        <textarea id="backup-text" rows="5"></textarea>
+        <button class="btn small" id="restore-go" style="margin-top:8px;">Restore</button>
+      </div>
       <button class="btn ghost small" id="reset-logs-btn">Reset all logged workouts</button>
     </div>
   </section>
@@ -506,6 +519,29 @@ document.getElementById('add-day-btn').addEventListener('click',()=>{
   if(!name) return;
   state.plan.push({id:uid(), name:name.trim(), exercises:[]});
   save(); renderPlan();
+});
+const bArea=document.getElementById('backup-area'), bText=document.getElementById('backup-text'),
+      bMsg=document.getElementById('backup-msg'), restoreGo=document.getElementById('restore-go');
+document.getElementById('backup-btn').addEventListener('click',async()=>{
+  const json=JSON.stringify(state);
+  bArea.style.display='block'; restoreGo.style.display='none'; bText.value=json;
+  try{ await navigator.clipboard.writeText(json); bMsg.textContent='Backup copied. Paste it into Notes to keep it safe.'; }
+  catch(e){ bText.focus(); bText.select(); bMsg.textContent='Select all the text below, copy it, and paste it into Notes.'; }
+});
+document.getElementById('restore-btn').addEventListener('click',()=>{
+  bArea.style.display='block'; restoreGo.style.display='inline-block'; bText.value='';
+  bText.placeholder='Paste your backup text here';
+  bMsg.textContent='Paste your backup, then tap Restore. This replaces what is currently in the app.';
+});
+restoreGo.addEventListener('click',()=>{
+  let p=null;
+  try{ p=JSON.parse(bText.value.trim()); }catch(e){}
+  if(!p || !Array.isArray(p.plan) || !Array.isArray(p.history)){ bMsg.textContent="That doesn't look like a valid backup."; return; }
+  if(!confirm('Replace everything currently in the app with this backup?')) return;
+  state=p; if(!state.drafts) state.drafts={};
+  currentSessionId=null; confirmationData=null; activeLogDay=null;
+  save(); renderPlan(); renderLogPicker();
+  bText.value=''; bArea.style.display='none';
 });
 document.getElementById('reset-logs-btn').addEventListener('click',()=>{
   if(!confirm('This permanently deletes all logged workout history. Your training plan stays as-is. Continue?')) return;
